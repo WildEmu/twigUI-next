@@ -5,6 +5,7 @@ After=sway.service
 
 [Service]
 Type=simple
+RemainAfterExit=yes
 Environment=HOME=/mnt/SDCARD
 EnvironmentFile=/etc/profile
 ExecStart=/usr/bin/start_spruce.sh
