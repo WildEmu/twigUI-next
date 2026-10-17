@@ -17,8 +17,9 @@ mediatek/mt7610u.bin
 
 ath6k/AR6004/hw1.?/bdata.bin
 ath9k_htc/*
-brcm/*
-rt*/*
+rtl_nic/*
+rtlwifi/*
+rtw88/*
 
 #Panthor GPU firmware
 arm/mali*

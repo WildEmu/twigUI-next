@@ -24,11 +24,6 @@ post_patch() {
 
     mkdir -p "${PKG_FW_SOURCE}"
       ./copy-firmware.sh --verbose "${PKG_FW_SOURCE}"
-
-    # copy extra firmware files (or overwrite upstream ones)
-    if [ -d ${PKG_DIR}/extra-firmware ]; then
-      cp -r ${PKG_DIR}/extra-firmware/* "${PKG_FW_SOURCE}"
-    fi
   )
 }
 
@@ -74,14 +69,6 @@ makeinstall_target() {
 
   # brcm pcie firmware is only needed by x86_64
   [ "${TARGET_ARCH}" != "x86_64" ] && rm -fr ${FW_TARGET_DIR}/brcm/*-pcie.*
-
-  # The BSP kernel for RK3588 reformats the vendor firmware path for Realtek BT devices,
-  # so symlink the firmware.
-  if [ ${DEVICE} = "RK3588" ]; then
-    for i in ${FW_TARGET_DIR}/rtl_bt/*.bin; do
-      ln -s "rtl_bt/$(basename ${i})" "${FW_TARGET_DIR}/$(basename ${i%.*})"
-    done
-  fi
 
   # Sm8250 devices need slpi firmware set to the correct dir
   if [ ${DEVICE} = "SM8250" ]; then
