@@ -21,6 +21,13 @@
             ]
         },
         {
+            "package": "armgba-lr",
+            "files": [
+                {"src": "armgba_libretro.so", "dest": "/RetroArch/.retroarch/cores64/"},
+                {"src": "armgba_libretro.info", "dest": "/RetroArch/.retroarch/info/"}
+            ]
+        },
+        {
             "package": "atari800-lr",
             "files": [
                 {"src": "atari800_libretro.so", "dest": "/RetroArch/.retroarch/cores64/"},
