@@ -219,7 +219,7 @@
         {
             "package": "gametank-lr",
             "files": [
-                {"src": "libgametank_libretro.so", "dest": "/RetroArch/.retroarch/cores64/"},
+                {"src": "gametank_libretro.so", "dest": "/RetroArch/.retroarch/cores64/"},
                 {"src": "gametank_libretro.info", "dest": "/RetroArch/.retroarch/info/"}
             ]
         },
