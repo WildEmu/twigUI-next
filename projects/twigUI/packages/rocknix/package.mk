@@ -17,9 +17,6 @@ make_target() {
 makeinstall_target() {
   mkdir -p ${INSTALL}/usr/bin/
 
-  ### Compatibility links for ports
-  ln -s /storage/roms ${INSTALL}/roms
-
   ### Add some quality of life customizations for hardworking devs.
   if [ -n "${LOCAL_SSH_KEYS_FILE}" ]
   then
