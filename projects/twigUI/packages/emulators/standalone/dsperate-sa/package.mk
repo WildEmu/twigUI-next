@@ -1,26 +1,17 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026-present ROCKNIX (https://github.com/ROCKNIX)
 
 PKG_NAME="dsperate-sa"
-PKG_VERSION="v1.15.1"
-PKG_LICENSE="GPLv2"
-PKG_SITE="https://github.com/beebono/DSperate/"
-PKG_URL="${PKG_SITE}/archive/${PKG_VERSION}.tar.gz"
-PKG_DEPENDS_TARGET="toolchain SDL2 libzip wayland"
-PKG_LONGDESC="An attempt at reimplementing DraStic-level performance with modern features"
-PKG_TOOLCHAIN="cmake"
-
-PKG_CMAKE_OPTS_TARGET+=" -DCMAKE_INSTALL_PREFIX=/usr \
-			-DCMAKE_SYSROOT=${SYSROOT_PREFIX} \
-			-DCMAKE_TOOLCHAIN_FILE=${CMAKE_CONF} \
-			-DCMAKE_BUILD_TYPE=Release \
-			-DDSPERATE_JIT=ON \
-			-DDSPERATE_NEON=ON \
-			-DDSPERATE_HEADLESS=OFF \
-			-DDSPERATE_SDL=ON \
-			-DDSPERATE_WAYLAND=ON \
-			-DDSPERATE_TESTS=OFF"
+PKG_VERSION="3.0.4"
+PKG_SHA256="27f98e007837bdf31b3ba51dc8ca447e862ea05aa09163ef584d6a217be1acf9"
+PKG_LICENSE="GPL-3.0-or-later"
+PKG_SITE="https://github.com/beebono/DSperate"
+PKG_URL="${PKG_SITE}/releases/download/v${PKG_VERSION}/dsperate-v${PKG_VERSION}-linux-${TARGET_ARCH}.tar.gz"
+PKG_SOURCE_DIR="dsperate-v${PKG_VERSION}-linux-${TARGET_ARCH}"
+PKG_DEPENDS_TARGET="toolchain SDL2"
+PKG_LONGDESC="A Nintendo DS emulator reimplementing DraStic's JIT and NEON rendering with melonDS accuracy."
+PKG_TOOLCHAIN="manual"
 
 makeinstall_target() {
-  cp "${PKG_BUILD}"/.${TARGET_NAME}/src/frontend/sdl/dsperate "${PKG_BUILD}"/
-  ${STRIP} "${PKG_BUILD}"/dsperate
+  :
 }
