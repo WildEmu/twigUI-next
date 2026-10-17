@@ -4,6 +4,20 @@
 . /mnt/SDCARD/spruce/scripts/firstbootLaneCommon.sh
 . /mnt/SDCARD/spruce/scripts/network/sambaFunctions.sh
 . /mnt/SDCARD/spruce/scripts/network/sshFunctions.sh
+. /mnt/SDCARD/spruce/scripts/network/raproxyFunctions.sh
+
+# Pids of device_init background jobs that must be gone before the frontend starts.
+# Only runtime.sh's shell owns them, so only it can wait on them.
+DEVICE_INIT_WAIT_PIDS=""
+
+# Waits for the device_init jobs that must finish before the frontend starts; returns 0.
+wait_device_init_jobs() {
+    for _diw_pid in $DEVICE_INIT_WAIT_PIDS; do
+        wait "$_diw_pid" 2>/dev/null
+    done
+    DEVICE_INIT_WAIT_PIDS=""
+    return 0
+}
 
 run_sd_card_fix_if_triggered() {
     needs_fix=false
@@ -23,6 +37,17 @@ run_sd_card_fix_if_triggered() {
     fi
 }
 
+# Read by PortMaster's device_info.txt. In /tmp because the card moves between devices.
+write_device_info() {
+    cat > /tmp/spruce_device_info.env <<EOF
+CFW_NAME="spruce"
+CFW_VERSION="$(get_version)"
+DEVICE_NAME="$SPRUCE_DEVICE_NAME"
+SPRUCE_PLATFORM="$PLATFORM"
+ANALOG_STICKS="$DEVICE_NUM_ANALOG_STICKS"
+EOF
+}
+
 hide_fw_app() {
     jq 'if .label then ."#label" = .label | del(.label) else . end' /mnt/SDCARD/App/-FirmwareUpdate-/config.json > /mnt/SDCARD/App/-FirmwareUpdate-/config.json.tmp && mv /mnt/SDCARD/App/-FirmwareUpdate-/config.json.tmp /mnt/SDCARD/App/-FirmwareUpdate-/config.json
 }
@@ -33,12 +58,24 @@ show_fw_app() {
 
 # Define the function to check and hide the firmware update app
 check_and_handle_firmware_app() {
-    need_fw_update="$(check_if_fw_needs_update)"
-    if [ "$need_fw_update" = "true" ]; then
-        show_fw_app
-    else
-        hide_fw_app
-    fi
+    hide_fw_app
+    [ "$(check_if_fw_needs_update)" = "true" ] && show_fw_app
+}
+
+# Download the OTA release info into "$TMP_DIR/spruce". Certificates are
+# verified first (SSL_CERT_FILE); only a TLS failure retries with -k, the
+# same way downloader.sh does it.
+fetch_release_info() {
+    curl -sS -f --connect-timeout 15 -o "$TMP_DIR/spruce" "$1" 2>"$TMP_DIR/curl_error"
+    fetch_rc=$?
+    case "$fetch_rc" in
+        35|51|58|59|60|77)
+            log_message "Update Check: TLS verification failed for $1 (curl $fetch_rc); retrying without certificate verification"
+            curl -k -sS -f --connect-timeout 15 -o "$TMP_DIR/spruce" "$1" 2>"$TMP_DIR/curl_error"
+            fetch_rc=$?
+            ;;
+    esac
+    [ "$fetch_rc" -eq 0 ] && grep -q "RELEASE_VERSION=" "$TMP_DIR/spruce"
 }
 
 check_for_update() {
@@ -59,7 +96,21 @@ check_for_update_file() {
     fi
 
     echo "Searching for update file"
-    UPDATE_FILE=$(find /mnt/SDCARD/ -maxdepth 1 -name "twigUI_V*.tar.gz" | awk -F'V' '{print $2, $0}' | sort -n | tail -n1 | cut -d' ' -f2-)
+    # Pad each version field into a fixed-width key before sorting. The old
+    # awk -F'V' | sort -n keyed on "4.4.0.7z", so sort -n only ever read the
+    # leading 4.4, every candidate tied, and 4.4.10 lost to 4.4.9.
+    UPDATE_FILE=$(find /mnt/SDCARD/ -maxdepth 1 -name "twigUI_V*.tar.gz" | awk '
+        {
+            v = $0
+            sub(/.*\/twigUI_V/, "", v)
+            sub(/\.tar.gz$/, "", v)
+            n = split(v, part, ".")
+            key = ""
+            for (i = 1; i <= 4; i++) {
+                key = key sprintf("%05d", (i <= n ? part[i] : 0) + 0)
+            }
+            print key "\t" $0
+        }' | sort | tail -n1 | cut -f2-)
     echo "Found update file: $UPDATE_FILE"
 
     if [ -z "$UPDATE_FILE" ]; then
@@ -157,10 +208,9 @@ unstage_archive() {
     fi
 }
 
-# These archives have always unpacked in the pre-menu lane: the target
-# argument used to be ignored, so "preCmd" here never took effect. Keep them
-# in preMenu; moving any of them to the background pre_cmd lane is a
-# deliberate boot-timing change, not a cleanup.
+# These archives have always unpacked in the pre-menu lane, before the menu is
+# drawn. preCmd unpacks after it in the same foreground run, so moving any of
+# them there is a deliberate boot-timing change, not a cleanup.
 unstage_archives_wanted() {
     if [ "$DISPLAY_WIDTH" = "640" ] && [ "$DISPLAY_HEIGHT" = "480" ]; then
         unstage_archive "overlays_640x480.7z" "preMenu"
@@ -175,24 +225,6 @@ unstage_archives_wanted() {
     fi
     if [ "$DEVICE_HAS_32_BIT_RA" = "true" ] || [ "$DEVICE_USES_64_BIT_RA" != "true" ]; then
         unstage_archive "cores32.7z" "preMenu"
-    fi
-}
-
-UPDATE_ICON="/mnt/SDCARD/Themes/SPRUCE/icons/app/firmwareupdate.png"
-
-# This works with checker to display a notification if an update is available
-# But only on next boot. So if they find the app by themselves it's fine.
-update_notification(){
-    if [ "$(jq -r '.wifi // 0' "$SYSTEM_JSON")" -eq 0 ]; then
-        exit 1
-    fi
-
-    if flag_check "update_available"; then
-        available_version=$(cat "$(flag_path update_available)")
-        display --icon "$UPDATE_ICON" -t "Update available!
-Version ${available_version} is ready to install
-Go to Apps and look for 'Update Available'" --okay
-        flag_remove "update_available"
     fi
 }
 
@@ -222,42 +254,33 @@ read_unpack_state() {
     fi
 }
 
-run_archive_unpacker_foreground() {
-    force_foreground_precmd="$1"
+# Checks whether any archive is waiting to be unpacked; returns 0 if one is.
+# The lanes checked must match archiveUnpacker.sh.
+archives_queued() {
+    for _aq in /mnt/SDCARD/Themes/*.7z /mnt/SDCARD/spruce/archives/preMenu/*.7z /mnt/SDCARD/spruce/archives/preCmd/*.7z; do
+        [ -e "$_aq" ] && return 0
+    done
+    return 1
+}
 
-    if [ "$force_foreground_precmd" = "1" ]; then
-        SPRUCE_FIRSTBOOT_UI="$FIRSTBOOT_PROGRESS_CONTEXT_UI" \
-        SPRUCE_FIRSTBOOT_ARCHIVE_TOTAL="${FIRSTBOOT_PROGRESS_CONTEXT_TOTAL:-0}" \
-        SPRUCE_FIRSTBOOT_ARCHIVE_COMPLETED="${FIRSTBOOT_PROGRESS_CONTEXT_COMPLETED:-0}" \
-        UNPACKER_FORCE_FOREGROUND_PRECMD=1 /mnt/SDCARD/spruce/scripts/archiveUnpacker.sh
-    else
-        SPRUCE_FIRSTBOOT_UI="$FIRSTBOOT_PROGRESS_CONTEXT_UI" \
-        SPRUCE_FIRSTBOOT_ARCHIVE_TOTAL="${FIRSTBOOT_PROGRESS_CONTEXT_TOTAL:-0}" \
-        SPRUCE_FIRSTBOOT_ARCHIVE_COMPLETED="${FIRSTBOOT_PROGRESS_CONTEXT_COMPLETED:-0}" \
-        /mnt/SDCARD/spruce/scripts/archiveUnpacker.sh
-    fi
+run_archive_unpacker_foreground() {
+    SPRUCE_FIRSTBOOT_UI="$FIRSTBOOT_PROGRESS_CONTEXT_UI" \
+    SPRUCE_FIRSTBOOT_ARCHIVE_TOTAL="${FIRSTBOOT_PROGRESS_CONTEXT_TOTAL:-0}" \
+    SPRUCE_FIRSTBOOT_ARCHIVE_COMPLETED="${FIRSTBOOT_PROGRESS_CONTEXT_COMPLETED:-0}" \
+    /mnt/SDCARD/spruce/scripts/archiveUnpacker.sh
 }
 
 run_unpacker_foreground() {
     log_prefix="$1"
-    allow_background_state="$2"
-    force_foreground_precmd="$3"
-    firstboot_ui="$4"
+    firstboot_ui="$2"
 
+    wait_device_init_jobs   # the unpack status is shown by a PyUI
     firstboot_progress_prepare_unpacker_context "${firstboot_ui:-0}"
-    run_archive_unpacker_foreground "$force_foreground_precmd"
+    run_archive_unpacker_foreground
     firstboot_progress_finalize_unpacker_context "${firstboot_ui:-0}"
 
     unpack_state="$(read_unpack_state)"
-    if [ "$allow_background_state" = "1" ] && [ "$unpack_state" = "running" ]; then
-        log_message "Unpacker: $log_prefix returned with background worker still active."
-    else
-        log_message "Unpacker: $log_prefix returned with state=$unpack_state."
-    fi
-
-    if [ "$allow_background_state" = "1" ] && [ "$unpack_state" = "running" ]; then
-        return 0
-    fi
+    log_message "Unpacker: $log_prefix returned with state=$unpack_state."
 
     [ "$unpack_state" = "complete" ]
 }
@@ -388,8 +411,15 @@ set_up_boot_action() {
                 log_message "Attempting to boot into Nintendo DS firmware via DSperate BootMenu.nds"
                 echo "\"/mnt/SDCARD/Emu/NDS/../../spruce/scripts/emu/standard_launch.sh\" \"/mnt/SDCARD/Roms/NDS/BootMenu.nds\"" > /tmp/cmd_to_run.sh
                 ;;
+            "DSi firmware")
+                log_message "Attempting to boot into Nintendo DSi firmware via DSperate BootMenuDSi.nds"
+                echo "\"/mnt/SDCARD/Emu/NDSI/../../spruce/scripts/emu/standard_launch.sh\" \"/mnt/SDCARD/Roms/NDSI/BootMenuDSi.nds\"" > /tmp/cmd_to_run.sh
+                ;;
             "PPSSPP")
                 echo "\"/mnt/SDCARD/App/PPSSPP/launch.sh\"" > /tmp/cmd_to_run.sh
+                ;;
+            "Songo#5")
+                echo "\"/mnt/SDCARD/App/Songo#5/launch.sh\"" > /tmp/cmd_to_run.sh
                 ;;
             "Apotris"*)
                 log_message "Sun mode engaged."
@@ -399,6 +429,10 @@ set_up_boot_action() {
                 else
                     log_message "Sun's literal entire romset not found; booting to spruceUI instead."
                 fi
+                ;;
+            "Mega Mode")
+                log_message "In the year 20XX AD... the first annual Ry mode was launched!"
+                log_message "$("$(get_python_path)" /mnt/SDCARD/spruce/scripts/megamode.py "$PLATFORM" $(device_names) 2>&1)"
                 ;;
         esac
     fi

@@ -2,7 +2,7 @@
 # Copyright (C) 2023 JELOS (https://github.com/JustEnoughLinuxOS)
 
 PKG_NAME="twig"
-PKG_VERSION="c104be3fd54cb2a22e0f4083671ada31016caaf0"
+PKG_VERSION="b38340697329e58d8f2f3a895e95aeb94abfb1c9"
 PKG_LICENSE="Public Domain"
 PKG_SITE="https://github.com/spruceUI/spruceOS/"
 PKG_URL="https://github.com/spruceUI/spruceOS/archive/${PKG_VERSION}.tar.gz"
@@ -62,6 +62,9 @@ make_target() {
   cat "${CONF_FILE}" | jq '.menuOptions."System Settings".useZRAM.selected = "True"' | tee "${CONF_FILE}"
   cat "${CONF_FILE}" | jq '.menuOptions."Battery Settings".idlemonChargingInMenu.selected = "30s"' | tee "${CONF_FILE}"
   cat "${CONF_FILE}" | jq '.menuOptions."Battery Settings".shutdownFromSleep.selected = "Off"' | tee "${CONF_FILE}"
+
+  cat "${CONF_FILE}" | jq 'del(.menuOptions."Network Settings".otaUpdateType)' | tee "${CONF_FILE}"
+  cat "${CONF_FILE}" | jq 'del(.menuOptions."Network Settings".releaseChannel)' | tee "${CONF_FILE}"
 
   # Create spruce 7z file
   ARCHIVE_FILE=${PKG_BUILD}/twigUI_SDCARD.7z
