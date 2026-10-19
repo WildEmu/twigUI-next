@@ -460,6 +460,29 @@ load_splash() {
   /usr/bin/fbv -c -i -y /flash/logo.bmp
 }
 
+# The device's charge screen, if it has one: it returns at once unless the board was powered
+# on by plugging in, else on the power key; exit 2 asks for a power off (charger removed).
+charge_mode() {
+  [ -f /sysroot/usr/lib/charge-mode/charge-mode.sh ] || return 0
+  sh /sysroot/usr/lib/charge-mode/charge-mode.sh /sysroot/usr/share/charge-mode
+  [ $? -eq 2 ] && do_poweroff
+}
+
+do_poweroff() {
+  echo "System powers off now..."
+
+  # stop output redirection
+  [ -n "${TEE_PID}" ] && kill ${TEE_PID} &>/dev/null
+
+  sync
+  for mnt in /sysroot /storage /flash; do
+    /usr/bin/busybox mountpoint -q ${mnt} && /usr/bin/busybox umount ${mnt} &>/dev/null
+  done
+
+  # -f: this shell is PID 1, so there is no init to signal
+  /usr/bin/busybox poweroff -f
+}
+
 do_reboot() {
   echo "System reboots now..."
 
@@ -1267,6 +1290,7 @@ for BOOT_STEP in \
     mount_sysroot \
     mount_storage \
     load_splash \
+    charge_mode \
     check_update \
     prepare_sysroot
 do
