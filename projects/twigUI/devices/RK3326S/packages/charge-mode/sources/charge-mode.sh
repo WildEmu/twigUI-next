@@ -1,6 +1,6 @@
 #!/bin/sh
 # Charge screen for the GKD Pixel 2 (the oakMOSS model), run by the initramfs (init: charge_mode)
-# with initramfs tools only: the battery level, dark after 30 s, any key wakes, power boots.
+# with initramfs tools only: battery level, dark after 30 s (LEDs show it), any key wakes, power boots.
 #   charge-mode.sh [FRAMES-DIR]   (default /sysroot/usr/share/charge-mode)
 #   exit 0: not a charger power-on, or power key while lit: carry on booting
 #   exit 2: charger gone for 3 s, power off (the caller unmounts and powers off)
@@ -46,6 +46,23 @@ level_frame() {
 
 # Same call as the init's splash: no clear, no info, no tty wait; it returns once drawn.
 show() { "$FBV" -c -i -y "$1" > /dev/null 2>&1; }
+
+# The five LEDs while the panel is dark, ROCKNIX's Pixel 2 charging pattern: led-0 red, led-1..4
+# green bottom to top (active-low in the DTS, so 1 = on); solid to the level, the next one blinks.
+LEDS=/sys/class/leds
+leds() {
+    [ "$*" = "$led_state" ] && return; led_state="$*"; _i=0
+    for _v in "$@"; do echo "$_v" > "$LEDS/led-$_i/brightness" 2>/dev/null; _i=$((_i + 1)); done
+}
+leds_level() {
+    c=$(level); b=$1
+    if [ "$c" -ge 100 ] || [ "$(cat $PS/battery/status 2>/dev/null)" = Full ]; then leds 0 1 1 1 1
+    elif [ "$c" -le 10 ]; then leds 1 "$b" 0 0 0
+    elif [ "$c" -le 25 ]; then leds "$b" 1 0 0 0
+    elif [ "$c" -le 50 ]; then leds 0 1 "$b" 0 0
+    elif [ "$c" -le 75 ]; then leds 0 1 1 "$b" 0
+    else leds 0 1 1 1 "$b"; fi
+}
 
 [ -x "$FBV" ] && [ -f "$FRAMES/level-100.bmp" ] || { log "no frames in $FRAMES, booting"; exit 0; }
 
@@ -100,12 +117,14 @@ stop_readers() {
 
 # 4 ticks a second. The charger counts as gone only after 3 s offline (oakMOSS saw a fresh
 # charger read offline once on a flat cell).
-TICKS=$((BLANK_AFTER * 4)); lit=$TICKS; offline=0
+TICKS=$((BLANK_AFTER * 4)); lit=$TICKS; offline=0; tick=0
+leds 0 0 0 0 0
 while :; do
+    tick=$((tick + 1))
     if online; then offline=0; else offline=$((offline + 1)); fi
     if [ "$offline" -ge 12 ]; then
         log "charger removed at $(level)%; powering off"
-        stop_readers
+        stop_readers; leds 0 0 0 0 0
         exit 2
     fi
     power=1; other=1
@@ -116,7 +135,7 @@ while :; do
         if [ "$lit" -eq 0 ]; then
             echo 0 > "$FBSYS/blank" 2>/dev/null
             frame=$(level_frame); show "$frame"
-            log "woken at $(level)%"
+            log "woken at $(level)%"; leds 0 0 0 0 0
         fi
         lit=$TICKS
     fi
@@ -126,10 +145,11 @@ while :; do
         lit=$((lit - 1))
         [ "$lit" -eq 0 ] && echo 4 > "$FBSYS/blank" 2>/dev/null
     fi
+    [ "$lit" -eq 0 ] && leds_level $((tick / 2 % 2))
     usleep 250000
 done
 
-stop_readers
+stop_readers; leds 0 0 0 0 0
 log "power key at $(level)%; booting"
 echo 0 > "$FBSYS/blank" 2>/dev/null
 [ -f /flash/logo.bmp ] && show /flash/logo.bmp

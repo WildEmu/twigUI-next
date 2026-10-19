@@ -17,6 +17,7 @@ setup() {
   echo 0 > sys/class/power_supply/ac/online; echo 1 > sys/class/power_supply/usb/online
   echo 42 > sys/class/power_supply/battery/capacity
   echo 0 > sys/class/graphics/fb0/blank
+  for l in 0 1 2 3 4; do mkdir -p "sys/class/leds/led-$l"; echo 0 > "sys/class/leds/led-$l/brightness"; done
   echo schedutil > sys/devices/system/cpu/cpufreq/policy0/scaling_governor
   i=0
   for name in "rk805 pwrkey" "rockchip-rk817 Headset" gpio-keys pixel2_joypad; do
@@ -58,6 +59,8 @@ finish() { exec 3>&- 4>&- 5>&-; }
 waitrc() { local n=0; while kill -0 "$PID" 2>/dev/null && [ $n -lt "$1" ]; do sleep 0.25; n=$((n + 1)); done
   if kill -0 "$PID" 2>/dev/null; then kill "$PID"; wait "$PID" 2>/dev/null; RC=timeout; else wait "$PID"; RC=$?; fi; }
 S() { cat "$T/root/$1" 2>/dev/null; }
+L() { for l in 0 1 2 3 4; do printf %s "$(S sys/class/leds/led-$l/brightness)"; done; }
+LS() { for _ in 1 2 3 4 5 6 7 8; do L; echo; sleep 0.3; done | sort -u | tr '\n' ' '; }   # distinct states, 2.4 s
 
 # 1: lit screen, power key boots: level frame first, splash last, governor restored.
 setup; start; sleep 2
@@ -114,17 +117,26 @@ press 3 116; waitrc 20; finish
 
 # 5: dark after 30 s; a pad press (BTN_SOUTH) or the power key while dark only wakes; power then boots.
 if [ "${1:-}" != quick ]; then
-  setup; start; sleep 32
+  setup; start; sleep 2
+  [ "$(L)" = 00000 ] && ok "LEDs off while lit" || bad "LEDs lit: $(L)"
+  sleep 30
   [ "$(S sys/class/graphics/fb0/blank)" = 4 ] && ok "blank after 30 s" || bad "blank=$(S sys/class/graphics/fb0/blank)"
+  st=$(LS)
+  [ "$st" = "01000 01100 " ] && ok "42%: green 1 solid, green 2 blinks" || bad "42% LED states: $st"
   press 5 304; sleep 1
   [ "$(S sys/class/graphics/fb0/blank)" = 0 ] && ok "pad press wakes" || bad "after pad: blank=$(S sys/class/graphics/fb0/blank)"
+  [ "$(L)" = 00000 ] && ok "LEDs off on wake" || bad "LEDs after wake: $(L)"
   [ "$(tail -1 storage/fbv.log)" = "-c -i -y /frames/level-040.bmp" ] && ok "frame redrawn on wake" || bad "after wake: $(tail -1 storage/fbv.log)"
+  echo 100 > sys/class/power_supply/battery/capacity
   sleep 31
   [ "$(S sys/class/graphics/fb0/blank)" = 4 ] && ok "dark again" || bad "blank=$(S sys/class/graphics/fb0/blank)"
+  st=$(LS)
+  [ "$st" = "01111 " ] && ok "100%: four green solid" || bad "100% LED states: $st"
   press 3 116; sleep 1
   kill -0 "$PID" 2>/dev/null && ok "power while dark only wakes" || bad "booted from dark"
   [ "$(S sys/class/graphics/fb0/blank)" = 0 ] && ok "unblanked" || bad "blank=$(S sys/class/graphics/fb0/blank)"
   press 3 116; waitrc 20; finish; [ "$RC" = 0 ] && ok "power while lit -> exit 0" || bad "rc $RC"
+  [ "$(L)" = 00000 ] && ok "LEDs off when booting" || bad "LEDs at boot: $(L)"
 fi
 
 pgrep -f charge-mode.sh >/dev/null && bad "a charge-mode.sh process is left over" || ok "no leftover processes"
