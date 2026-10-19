@@ -11,6 +11,7 @@ FBSYS=/sys/class/graphics/fb0
 PS=/sys/class/power_supply
 GOV=/sys/devices/system/cpu/cpufreq/policy0/scaling_governor
 LOG=${CHARGE_MODE_LOG:-/storage/.charge-mode.log}
+PRINTK=${CHARGE_MODE_PRINTK:-/proc/sys/kernel/printk}
 BLANK_AFTER=30
 BOOT_MODE_REG=0xff010200    # PX30 PMU_GRF_OS_REG0: the kernel's reboot-mode magic, 0 on a cold boot
 
@@ -68,10 +69,20 @@ leds_level() {
 
 gov=$(cat "$GOV" 2>/dev/null)
 echo powersave > "$GOV" 2>/dev/null
+# The boot console (tty1) echoes the volume keys and repaints its text on unblank: run on an
+# empty VT with console messages muted, and give both back before leaving (console_back).
+loglevel=$(cut -f1 "$PRINTK" 2>/dev/null)
+echo 1 > "$PRINTK" 2>/dev/null
+chvt 2 2>/dev/null
+console_back() {
+    chvt 1 2>/dev/null
+    [ -n "$loglevel" ] && echo "$loglevel" > "$PRINTK" 2>/dev/null
+}
 echo 0 > "$FBSYS/blank" 2>/dev/null
 frame=$(level_frame); show "$frame"
 
-# Key nodes by name (no /dev/input/by-path in the initramfs). The joypad may register late.
+# Key nodes by name (no /dev/input/by-path in the initramfs). gpio-keys holds the volume keys;
+# the joypad module only loads later, so it is taken if present but not waited for.
 pek=""; pads=""; n=0
 while :; do
     pek=""; pads=""
@@ -81,7 +92,7 @@ while :; do
             gpio-keys|pixel2_joypad) pads="$pads /dev/input/${d##*/}" ;;
         esac
     done
-    case "$pads" in *" "*" "*) [ -n "$pek" ] && break ;; esac
+    [ -n "$pek" ] && [ -n "$pads" ] && break
     [ "$n" -ge 20 ] && break
     usleep 250000; n=$((n + 1))
 done
@@ -124,7 +135,7 @@ while :; do
     if online; then offline=0; else offline=$((offline + 1)); fi
     if [ "$offline" -ge 12 ]; then
         log "charger removed at $(level)%; powering off"
-        stop_readers; leds 0 0 0 0 0
+        stop_readers; leds 0 0 0 0 0; console_back
         exit 2
     fi
     power=1; other=1
@@ -151,7 +162,10 @@ done
 
 stop_readers; leds 0 0 0 0 0
 log "power key at $(level)%; booting"
+console_back
 echo 0 > "$FBSYS/blank" 2>/dev/null
-[ -f /flash/logo.bmp ] && show /flash/logo.bmp
+# Until the frontend draws: "Loading frontend" (or the plain splash)
+if [ -f "$FRAMES/booting.bmp" ]; then show "$FRAMES/booting.bmp"
+elif [ -f /flash/logo.bmp ]; then show /flash/logo.bmp; fi
 [ -n "$gov" ] && echo "$gov" > "$GOV" 2>/dev/null
 exit 0

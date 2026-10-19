@@ -25,8 +25,11 @@ setup() {
     mkfifo "devinput/event$i"; i=$((i + 1))
   done
   for l in $(seq 0 5 100); do : > "frames/level-$(printf %03d "$l").bmp"; done
-  : > flash/logo.bmp
+  : > frames/booting.bmp; : > flash/logo.bmp
   printf '#!/bin/sh\necho "$*" >> /storage/fbv.log\n' > bin/fbv; chmod +x bin/fbv
+  # chvt logs the VT; the printk file stands in for /proc/sys/kernel/printk
+  printf '#!/bin/sh\necho "$1" >> /storage/vt.log\n' > bin/chvt; chmod +x bin/chvt
+  printf '7\t4\t1\t7\n' > storage/printk
   # a plug-in power-on (rk808's probe line) on a cold boot (boot-mode register 0)
   mkdir -p fake; echo "[    1.52] rk808 0-0020: source: on=0x40, off=0x08" > fake/dmesg
   echo 0x00000000 > fake/devmem
@@ -49,7 +52,7 @@ start() {
     --bind "$T/root/flash" /flash --bind "$T/root/frames" /frames --bind "$T/root/bin" /bin \
     --ro-bind "$T/root/fake" /fake \
     --ro-bind "$T/root/bin/fbv" /usr/bin/fbv --ro-bind "$T/charge-mode.sh" /charge-mode.sh \
-    --setenv PATH /bin --setenv CHARGE_MODE_LOG /storage/charge.log \
+    --setenv PATH /bin --setenv CHARGE_MODE_LOG /storage/charge.log --setenv CHARGE_MODE_PRINTK /storage/printk \
     /bin/sh /charge-mode.sh /frames &
   PID=$!
   # read-write opens never block, even if the sandbox failed to start
@@ -62,14 +65,24 @@ S() { cat "$T/root/$1" 2>/dev/null; }
 L() { for l in 0 1 2 3 4; do printf %s "$(S sys/class/leds/led-$l/brightness)"; done; }
 LS() { for _ in 1 2 3 4 5 6 7 8; do L; echo; sleep 0.3; done | sort -u | tr '\n' ' '; }   # distinct states, 2.4 s
 
-# 1: lit screen, power key boots: level frame first, splash last, governor restored.
+# 1: lit screen, power key boots: level frame first, "Loading frontend" last, governor restored;
+# charge mode runs on VT 2 with console messages muted, and gives both back.
 setup; start; sleep 2
+[ "$(S storage/vt.log)" = 2 ] && [ "$(S storage/printk)" = 1 ] && ok "on VT 2, console muted" || bad "vt '$(S storage/vt.log)' printk '$(S storage/printk)'"
 press 3 116; waitrc 20; finish
 [ "$RC" = 0 ] && ok "power key -> exit 0" || bad "power key -> rc $RC"
 [ "$(head -1 storage/fbv.log)" = "-c -i -y /frames/level-040.bmp" ] && ok "first frame level-040" || bad "first frame: $(head -1 storage/fbv.log)"
-[ "$(tail -1 storage/fbv.log)" = "-c -i -y /flash/logo.bmp" ] && ok "splash after power" || bad "last frame: $(tail -1 storage/fbv.log)"
+[ "$(tail -1 storage/fbv.log)" = "-c -i -y /frames/booting.bmp" ] && ok "loading frame after power" || bad "last frame: $(tail -1 storage/fbv.log)"
+[ "$(S storage/vt.log | tr '\n' ' ')" = "2 1 " ] && [ "$(S storage/printk)" = 7 ] && ok "VT 1 and loglevel 7 back" || bad "vt '$(S storage/vt.log | tr '\n' ' ')' printk '$(S storage/printk)'"
 [ "$(S sys/devices/system/cpu/cpufreq/policy0/scaling_governor)" = schedutil ] && ok "governor restored" || bad "governor $(S sys/devices/system/cpu/cpufreq/policy0/scaling_governor)"
 grep -q "power key /dev/input/event0, pads /dev/input/event2 /dev/input/event3" storage/charge.log && ok "key nodes found by name" || bad "nodes: $(head -1 storage/charge.log)"
+
+# 1b: no joypad node (it loads after the initramfs): keys are read at once, not after 5 s;
+# no booting.bmp: the plain splash.
+setup; rm -rf sys/class/input/event3; rm -f frames/booting.bmp; start; sleep 1.5
+grep -q "power key /dev/input/event0, pads /dev/input/event2$" storage/charge.log && ok "no joypad: keys read within 1.5 s" || bad "nodes: $(cat storage/charge.log)"
+press 3 116; waitrc 20; finish
+[ "$RC" = 0 ] && [ "$(tail -1 storage/fbv.log)" = "-c -i -y /flash/logo.bmp" ] && ok "no booting.bmp -> splash" || bad "rc $RC, last frame: $(tail -1 storage/fbv.log)"
 
 # 2: a pad press while lit does not boot; a level change redraws; charger gone 3 s -> exit 2.
 setup; start; sleep 2
@@ -82,6 +95,7 @@ kill -0 "$PID" 2>/dev/null && ok "still up 1.5 s after unplug" || bad "powered o
 waitrc 20; finish
 [ "$RC" = 2 ] && ok "charger gone -> exit 2" || bad "charger gone -> rc $RC"
 grep -q "charger removed at 47%" storage/charge.log && ok "logged removal" || bad "log: $(tail -1 storage/charge.log)"
+[ "$(tail -1 storage/vt.log)" = 1 ] && [ "$(S storage/printk)" = 7 ] && ok "VT and loglevel back before power off" || bad "vt '$(S storage/vt.log | tr '\n' ' ')' printk '$(S storage/printk)'"
 
 # 3: blip of the charger shorter than 3 s is ignored.
 setup; start; sleep 2
@@ -103,7 +117,8 @@ for c in "power key:0x80:0x00000000" "key and plug:0xc0:0x00000000" "warm reboot
   setup; [ -n "$on" ] && echo "[ 1.5] rk808 0-0020: source: on=$on, off=0x08" > fake/dmesg || : > fake/dmesg
   echo "$mode" > fake/devmem; [ -n "$mode" ] || : > fake/devmem
   start; waitrc 8; finish
-  [ "$RC" = 0 ] && [ ! -s storage/fbv.log ] && ok "$what -> boot, nothing drawn" || bad "$what -> rc $RC, drew $(wc -l < storage/fbv.log 2>/dev/null)"
+  [ "$RC" = 0 ] && [ ! -s storage/fbv.log ] && [ ! -e storage/vt.log ] && [ "$(S storage/printk)" = "$(printf '7\t4\t1\t7')" ] \
+    && ok "$what -> boot, nothing drawn, console untouched" || bad "$what -> rc $RC, drew $(wc -l < storage/fbv.log 2>/dev/null), vt '$(S storage/vt.log)'"
   grep -q "not a charger power-on" storage/charge.log && ok "$what logged" || bad "$what log: $(cat storage/charge.log)"
 done
 setup; echo "[ 1.5] rk808 0-0020: source: on=0x80, off=0x08" > fake/dmesg
