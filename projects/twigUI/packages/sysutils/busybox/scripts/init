@@ -466,6 +466,7 @@ charge_mode() {
   [ -f /sysroot/usr/lib/charge-mode/charge-mode.sh ] || return 0
   sh /sysroot/usr/lib/charge-mode/charge-mode.sh /sysroot/usr/share/charge-mode
   [ $? -eq 2 ] && do_poweroff
+  load_splash
 }
 
 do_poweroff() {
@@ -1289,7 +1290,6 @@ for BOOT_STEP in \
     update_bootmenu \
     mount_sysroot \
     mount_storage \
-    load_splash \
     charge_mode \
     check_update \
     prepare_sysroot
