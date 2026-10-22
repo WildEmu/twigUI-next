@@ -260,24 +260,29 @@
 		led-0 {
 			default-state = "off";
 			gpios = <&gpio1 RK_PB2 GPIO_ACTIVE_LOW>;
+			linux,default-trigger = "none";
 		};
 
 		led-1 {
 			default-state = "off";
 			gpios = <&gpio1 RK_PB4 GPIO_ACTIVE_LOW>;
+			linux,default-trigger = "none";
 		};
 
 		led-2 {
 			default-state = "off";
 			gpios = <&gpio1 RK_PB5 GPIO_ACTIVE_LOW>;
+			linux,default-trigger = "none";
 		};
 		led-3 {
 			default-state = "off";
 			gpios = <&gpio1 RK_PB6 GPIO_ACTIVE_LOW>;
+			linux,default-trigger = "none";
 		};
 		led-4 {
 			default-state = "off";
 			gpios = <&gpio1 RK_PB7 GPIO_ACTIVE_LOW>;
+			linux,default-trigger = "none";
 		};
 	};
 
